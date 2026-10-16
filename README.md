@@ -2,8 +2,8 @@
 
 A returns desk for a small online store. Support agents raise return requests, find them quickly, move them through a fixed lifecycle, record decisions and notes, and take them off the desk without losing the record.
 
-**Live app:** https://return-desk-gwgj.vercel.app/requests  ← replace
-**Time spent:** about 7 hours  ← replace with your real number
+**Live app:** https://return-desk-gwgj.vercel.app/requests 
+**Time spent:** about 7 hours
 
 ---
 
