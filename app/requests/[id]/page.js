@@ -1,478 +1,223 @@
 'use client';
 
-import { useState, useEffect, useCallback, use } from 'react';
-import { useRouter } from 'next/navigation';
-import StatusBadge from '../../components/StatusBadge';
-import Modal from '../../components/Modal';
-import RequestForm from '../../components/RequestForm';
-import ToastContainer, { useToast } from '../../components/Toast';
+import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useParams, useRouter } from 'next/navigation';
+import { apiFetch } from '@/app/lib/api';
+import { REASON_LABELS, RESOLUTIONS, RESOLUTION_LABELS } from '@/lib/constants';
+import StatusBadge from '@/app/components/StatusBadge';
+import RequestForm from '@/app/components/RequestForm';
 
-const REASON_LABELS = {
-  damaged: 'Damaged', wrong_item: 'Wrong Item', size_issue: 'Size Issue',
-  not_as_described: 'Not As Described', changed_mind: 'Changed Mind',
-};
-const RESOLUTION_LABELS = { refund: 'Refund', replacement: 'Replacement', store_credit: 'Store Credit' };
-const STATUS_LABELS = { open: 'Open', in_review: 'In Review', approved: 'Approved', rejected: 'Rejected', completed: 'Completed' };
-
-const TRANSITION_CONFIG = {
-  in_review: { label: 'Start Review', class: 'btn-warning', confirm: false },
-  approved: { label: 'Approve', class: 'btn-success', confirm: true },
-  rejected: { label: 'Reject', class: 'btn-danger', confirm: true },
-  completed: { label: 'Complete', class: 'btn-primary', confirm: true },
+const ACTION_LABELS = {
+  in_review: 'Start review',
+  approved: 'Approve…',
+  rejected: 'Reject',
+  completed: 'Mark completed',
 };
 
-function DetailField({ label, value, mono = false }) {
+export default function RequestDetailPage() {
+  const { id } = useParams();
+  const router = useRouter();
+  const [request, setRequest] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [actionError, setActionError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [approving, setApproving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const json = await apiFetch(`/api/requests/${id}`);
+      setRequest(json.data);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err.message);
+    }
+  }, [id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function run(action) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await action();
+      await load();
+      return true;
+    } catch (err) {
+      const details = err.details ? Object.values(err.details).join(' ') : '';
+      setActionError(`${err.message}${details ? ` — ${details}` : ''}`);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const changeStatus = (body) =>
+    run(() => apiFetch(`/api/requests/${id}/status`, { method: 'POST', body }));
+
+  async function remove() {
+    if (!confirm('Remove this request from the desk? The record is kept.')) return;
+    setBusy(true);
+    try {
+      await apiFetch(`/api/requests/${id}`, { method: 'DELETE' });
+      router.push('/requests');
+    } catch (err) {
+      setActionError(err.message);
+      setBusy(false);
+    }
+  }
+
+  if (loadError) {
+    return (
+      <div className="space-y-3">
+        <p className="rounded bg-red-50 p-3 text-red-800">{loadError}</p>
+        <Link href="/requests" className="text-blue-700 hover:underline">Back to all requests</Link>
+      </div>
+    );
+  }
+  if (!request) return <p className="text-gray-500">Loading request…</p>;
+
   return (
-    <div>
-      <dt className="text-xs font-medium uppercase tracking-wide" style={{ color: 'var(--muted)' }}>{label}</dt>
-      <dd className={`mt-1 text-sm ${mono ? 'font-mono' : ''}`}>{value || '—'}</dd>
+    <div className="space-y-6">
+      <Link href="/requests" className="text-sm text-blue-700 hover:underline">← All requests</Link>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="font-mono text-xl font-semibold">{request.reference}</h1>
+        <StatusBadge status={request.status} />
+      </div>
+
+      {actionError && <div className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">{actionError}</div>}
+
+      <div className="flex flex-wrap gap-2">
+        {request.allowed_transitions.map((status) => (
+          <button key={status} disabled={busy}
+            onClick={() => (status === 'approved' ? setApproving(true) : changeStatus({ status }))}
+            className="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50">
+            {ACTION_LABELS[status]}
+          </button>
+        ))}
+        {request.can_edit && !editing && (
+          <button onClick={() => setEditing(true)} className="rounded border px-3 py-2 text-sm">Edit details</button>
+        )}
+        {request.can_remove && (
+          <button disabled={busy} onClick={remove} className="rounded border border-red-300 px-3 py-2 text-sm text-red-700">
+            Remove
+          </button>
+        )}
+      </div>
+
+      {approving && (
+        <ApproveForm busy={busy} onCancel={() => setApproving(false)}
+          onSubmit={async (body) => { if (await changeStatus(body)) setApproving(false); }} />
+      )}
+
+      {editing ? (
+        <RequestForm initial={request} submitLabel="Save changes" onCancel={() => setEditing(false)}
+          onSubmit={async (values) => {
+            await apiFetch(`/api/requests/${id}`, { method: 'PATCH', body: values });
+            setEditing(false);
+            await load();
+          }} />
+      ) : (
+        <dl className="grid gap-4 rounded border bg-white p-4 text-sm sm:grid-cols-2">
+          <Field label="Customer" value={request.customer_name} />
+          <Field label="Contact" value={[request.customer_email, request.customer_phone].filter(Boolean).join(' · ')} />
+          <Field label="Order" value={request.order_number} />
+          <Field label="Item" value={`${request.item_name} (${request.item_sku}) × ${request.quantity}`} />
+          <Field label="Reason" value={REASON_LABELS[request.reason]} />
+          <Field label="Resolution" value={request.resolution
+            ? `${RESOLUTION_LABELS[request.resolution]}${request.refund_amount ? ` — ₹${request.refund_amount}` : ''}`
+            : '—'} />
+          <Field label="Description" value={request.description || '—'} />
+          <Field label="Created" value={new Date(request.created_at).toLocaleString('en-IN')} />
+        </dl>
+      )}
+
+      <Notes requestId={id} notes={request.notes} onAdded={load} />
     </div>
   );
 }
 
-export default function RequestDetailPage({ params: paramsPromise }) {
-  const params = use(paramsPromise);
-  const router = useRouter();
-  const { toasts, addToast } = useToast();
+function Field({ label, value }) {
+  return (
+    <div>
+      <dt className="text-gray-500">{label}</dt>
+      <dd className="font-medium break-words">{value}</dd>
+    </div>
+  );
+}
 
-  const [request, setRequest] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  const [showEdit, setShowEdit] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [showApprove, setShowApprove] = useState(false);
-  const [transitioning, setTransitioning] = useState(null);
-
-  const [noteText, setNoteText] = useState('');
-  const [addingNote, setAddingNote] = useState(false);
-
-  // Approve form state
+function ApproveForm({ busy, onSubmit, onCancel }) {
   const [resolution, setResolution] = useState('refund');
-  const [refundAmount, setRefundAmount] = useState('');
-  const [approveErrors, setApproveErrors] = useState({});
+  const [amount, setAmount] = useState('');
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit({ status: 'approved', resolution, refund_amount: resolution === 'refund' ? amount : null });
+      }}
+      className="flex flex-wrap items-end gap-3 rounded border bg-white p-4 text-sm"
+    >
+      <label>
+        Resolution
+        <select value={resolution} onChange={(e) => setResolution(e.target.value)} className="mt-1 block rounded border px-3 py-2">
+          {RESOLUTIONS.map((r) => <option key={r} value={r}>{RESOLUTION_LABELS[r]}</option>)}
+        </select>
+      </label>
+      {resolution === 'refund' && (
+        <label>
+          Refund amount (₹)
+          <input type="number" step="0.01" min="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}
+            className="mt-1 block w-36 rounded border px-3 py-2" />
+        </label>
+      )}
+      <button disabled={busy} className="rounded bg-green-600 px-4 py-2 text-white disabled:opacity-50">Confirm approval</button>
+      <button type="button" onClick={onCancel} className="rounded border px-4 py-2">Cancel</button>
+    </form>
+  );
+}
 
-  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
-  const [removing, setRemoving] = useState(false);
+function Notes({ requestId, notes, onAdded }) {
+  const [text, setText] = useState('');
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  const fetchRequest = useCallback(async () => {
-    setLoading(true);
+  async function add(e) {
+    e.preventDefault();
+    setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/requests/${params.id}`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        throw new Error(err?.error?.message || `Error ${res.status}`);
-      }
-      setRequest(await res.json());
+      await apiFetch(`/api/requests/${requestId}/notes`, { method: 'POST', body: { body: text } });
+      setText('');
+      await onAdded();
     } catch (err) {
-      setError(err.message);
+      setError(err.details?.body ?? err.message);
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
-  }, [params.id]);
-
-  useEffect(() => { fetchRequest(); }, [fetchRequest]);
-
-  const handleTransition = async (newStatus) => {
-    if (newStatus === 'approved') {
-      setShowApprove(true);
-      return;
-    }
-    setTransitioning(newStatus);
-    try {
-      const res = await fetch(`/api/requests/${params.id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      });
-      const result = await res.json();
-      if (!res.ok) {
-        addToast(result.error?.message || 'Status change failed', 'error');
-        return;
-      }
-      addToast(`Status changed to ${STATUS_LABELS[newStatus]}`, 'success');
-      fetchRequest();
-    } catch (err) {
-      addToast(err.message, 'error');
-    } finally {
-      setTransitioning(null);
-    }
-  };
-
-  const handleApprove = async (e) => {
-    e.preventDefault();
-    setApproveErrors({});
-    setTransitioning('approved');
-    try {
-      const body = {
-        status: 'approved',
-        resolution,
-        ...(resolution === 'refund' ? { refund_amount: refundAmount } : {}),
-      };
-      const res = await fetch(`/api/requests/${params.id}/status`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const result = await res.json();
-      if (!res.ok) {
-        if (result.error?.details) {
-          setApproveErrors(result.error.details);
-          return;
-        }
-        addToast(result.error?.message || 'Approval failed', 'error');
-        return;
-      }
-      setShowApprove(false);
-      addToast('Request approved', 'success');
-      fetchRequest();
-    } catch (err) {
-      addToast(err.message, 'error');
-    } finally {
-      setTransitioning(null);
-    }
-  };
-
-  const handleEdit = async (payload) => {
-    setEditing(true);
-    try {
-      const res = await fetch(`/api/requests/${params.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const result = await res.json();
-      if (!res.ok) {
-        if (result.error?.details) return { errors: result.error.details };
-        addToast(result.error?.message || 'Update failed', 'error');
-        return {};
-      }
-      setShowEdit(false);
-      addToast('Request updated', 'success');
-      fetchRequest();
-      return {};
-    } catch (err) {
-      addToast(err.message, 'error');
-      return {};
-    } finally {
-      setEditing(false);
-    }
-  };
-
-  const handleAddNote = async (e) => {
-    e.preventDefault();
-    if (!noteText.trim()) return;
-    setAddingNote(true);
-    try {
-      const res = await fetch(`/api/requests/${params.id}/notes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: noteText.trim() }),
-      });
-      if (!res.ok) {
-        const result = await res.json().catch(() => null);
-        addToast(result?.error?.message || 'Failed to add note', 'error');
-        return;
-      }
-      setNoteText('');
-      addToast('Note added', 'success');
-      fetchRequest();
-    } catch (err) {
-      addToast(err.message, 'error');
-    } finally {
-      setAddingNote(false);
-    }
-  };
-
-  const handleRemove = async () => {
-    setRemoving(true);
-    try {
-      const res = await fetch(`/api/requests/${params.id}`, { method: 'DELETE' });
-      if (!res.ok) {
-        const result = await res.json().catch(() => null);
-        addToast(result?.error?.message || 'Removal failed', 'error');
-        setShowRemoveConfirm(false);
-        return;
-      }
-      addToast('Request removed', 'success');
-      router.push('/');
-    } catch (err) {
-      addToast(err.message, 'error');
-    } finally {
-      setRemoving(false);
-    }
-  };
-
-  const formatDate = (d) => {
-    const date = new Date(d);
-    return date.toLocaleString('en-IN', {
-      day: '2-digit', month: 'short', year: 'numeric',
-      hour: '2-digit', minute: '2-digit',
-    });
-  };
-
-  // Loading state
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen" style={{ color: 'var(--muted)' }}>
-        <div className="text-center">
-          <div className="skeleton mx-auto mb-4" style={{ width: '3rem', height: '3rem', borderRadius: '50%' }} />
-          <p>Loading request…</p>
-        </div>
-      </div>
-    );
   }
-
-  // Error state
-  if (error) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-center p-8 rounded-xl" style={{ background: 'var(--card)', border: '1px solid var(--border)' }}>
-          <p className="text-3xl mb-3">😥</p>
-          <p className="font-semibold text-lg">{error}</p>
-          <div className="flex gap-3 justify-center mt-4">
-            <button className="btn btn-ghost" onClick={() => router.push('/')}>← Back to list</button>
-            <button className="btn btn-primary" onClick={fetchRequest}>Try Again</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  const r = request;
 
   return (
-    <div className="flex flex-col min-h-full">
-      <ToastContainer toasts={toasts} />
-
-      {/* Header */}
-      <header className="border-b px-4 sm:px-6 py-4" style={{ borderColor: 'var(--border)' }}>
-        <div className="max-w-5xl mx-auto">
-          <button
-            onClick={() => router.push('/')}
-            className="text-sm font-medium mb-3 inline-flex items-center gap-1 hover:underline"
-            style={{ color: '#6366f1' }}
-          >
-            ← Back to all requests
-          </button>
-          <div className="flex items-start justify-between flex-wrap gap-3">
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-3">
-                <span className="font-mono" style={{ color: '#6366f1' }}>{r.reference}</span>
-                <StatusBadge status={r.status} />
-              </h1>
-              <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
-                Created {formatDate(r.created_at)} · Last updated {formatDate(r.updated_at)}
-              </p>
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {/* Transition buttons — only legal actions */}
-              {r.allowed_transitions?.map((t) => {
-                const cfg = TRANSITION_CONFIG[t];
-                return (
-                  <button
-                    key={t}
-                    className={`btn ${cfg.class}`}
-                    onClick={() => handleTransition(t)}
-                    disabled={transitioning !== null}
-                    id={`btn-${t}`}
-                  >
-                    {transitioning === t ? '…' : cfg.label}
-                  </button>
-                );
-              })}
-              {r.can_edit && (
-                <button className="btn btn-ghost" onClick={() => setShowEdit(true)} id="btn-edit">
-                  ✏️ Edit
-                </button>
-              )}
-              {r.can_remove && (
-                <button className="btn btn-danger" onClick={() => setShowRemoveConfirm(true)} id="btn-remove"
-                  style={{ background: 'transparent', color: '#ef4444', borderColor: '#ef4444' }}>
-                  🗑 Remove
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Content */}
-      <main className="flex-1 px-4 sm:px-6 py-6">
-        <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-          {/* Left: Details */}
-          <div className="lg:col-span-2 flex flex-col gap-6">
-            {/* Customer info */}
-            <section className="rounded-xl p-5" style={{ background: 'var(--card)', border: '1px solid var(--border)' }}>
-              <h3 className="text-sm font-semibold uppercase tracking-wide mb-4" style={{ color: 'var(--muted)' }}>Customer</h3>
-              <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <DetailField label="Name" value={r.customer_name} />
-                <DetailField label="Email" value={r.customer_email} />
-                <DetailField label="Phone" value={r.customer_phone} />
-              </dl>
-            </section>
-
-            {/* Order & Item */}
-            <section className="rounded-xl p-5" style={{ background: 'var(--card)', border: '1px solid var(--border)' }}>
-              <h3 className="text-sm font-semibold uppercase tracking-wide mb-4" style={{ color: 'var(--muted)' }}>Order & Item</h3>
-              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <DetailField label="Order Number" value={r.order_number} mono />
-                <DetailField label="Item SKU" value={r.item_sku} mono />
-                <DetailField label="Item Name" value={r.item_name} />
-                <DetailField label="Quantity" value={r.quantity} />
-              </dl>
-            </section>
-
-            {/* Return details */}
-            <section className="rounded-xl p-5" style={{ background: 'var(--card)', border: '1px solid var(--border)' }}>
-              <h3 className="text-sm font-semibold uppercase tracking-wide mb-4" style={{ color: 'var(--muted)' }}>Return Details</h3>
-              <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <DetailField label="Reason" value={
-                  <span className="reason-badge">{REASON_LABELS[r.reason] || r.reason}</span>
-                } />
-                <DetailField label="Resolution" value={
-                  r.resolution
-                    ? <span className="font-medium">{RESOLUTION_LABELS[r.resolution]}{r.refund_amount ? ` — ₹${Number(r.refund_amount).toLocaleString('en-IN')}` : ''}</span>
-                    : '—'
-                } />
-                <div className="sm:col-span-2">
-                  <DetailField label="Description" value={r.description} />
-                </div>
-              </dl>
-            </section>
-          </div>
-
-          {/* Right: Notes */}
-          <div className="flex flex-col gap-4">
-            <section className="rounded-xl p-5" style={{ background: 'var(--card)', border: '1px solid var(--border)' }}>
-              <h3 className="text-sm font-semibold uppercase tracking-wide mb-4" style={{ color: 'var(--muted)' }}>
-                Notes ({r.notes?.length || 0})
-              </h3>
-
-              {/* Add note form */}
-              <form onSubmit={handleAddNote} className="mb-4">
-                <textarea
-                  className="input"
-                  rows={3}
-                  placeholder="Add a note…"
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                  id="note-input"
-                />
-                <button
-                  type="submit"
-                  className="btn btn-primary mt-2 w-full"
-                  disabled={!noteText.trim() || addingNote}
-                  id="btn-add-note"
-                >
-                  {addingNote ? 'Adding…' : 'Add Note'}
-                </button>
-              </form>
-
-              {/* Notes timeline */}
-              {r.notes?.length === 0 ? (
-                <p className="text-sm text-center py-4" style={{ color: 'var(--muted)' }}>No notes yet</p>
-              ) : (
-                <div className="flex flex-col">
-                  {r.notes?.map((note) => (
-                    <div key={note.id} className="note-item">
-                      <div className="flex items-baseline justify-between gap-2 mb-1">
-                        <span className="text-xs font-semibold">{note.author}</span>
-                        <span className="text-xs" style={{ color: 'var(--muted)' }}>
-                          {formatDate(note.created_at)}
-                        </span>
-                      </div>
-                      <p className="text-sm" style={{ lineHeight: 1.5 }}>{note.body}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        </div>
-      </main>
-
-      {/* Edit Modal */}
-      {showEdit && (
-        <Modal title="Edit Request Details" onClose={() => setShowEdit(false)} wide>
-          <RequestForm
-            initial={r}
-            onSubmit={handleEdit}
-            onCancel={() => setShowEdit(false)}
-            submitting={editing}
-          />
-        </Modal>
-      )}
-
-      {/* Approve Modal */}
-      {showApprove && (
-        <Modal title="Approve Request" onClose={() => { setShowApprove(false); setApproveErrors({}); }}>
-          <form onSubmit={handleApprove} className="flex flex-col gap-4">
-            <p className="text-sm" style={{ color: 'var(--muted)' }}>
-              Choose how this return will be resolved:
-            </p>
-
-            <div>
-              <label className="block text-sm font-medium mb-1">Resolution</label>
-              <select
-                className={`input select ${approveErrors.resolution ? 'input-error' : ''}`}
-                value={resolution}
-                onChange={(e) => { setResolution(e.target.value); setRefundAmount(''); setApproveErrors({}); }}
-                id="approve-resolution"
-              >
-                <option value="refund">Refund</option>
-                <option value="replacement">Replacement</option>
-                <option value="store_credit">Store Credit</option>
-              </select>
-              {approveErrors.resolution && <p className="text-xs mt-1" style={{ color: '#ef4444' }}>{approveErrors.resolution}</p>}
-            </div>
-
-            {resolution === 'refund' && (
-              <div>
-                <label className="block text-sm font-medium mb-1">Refund Amount (₹)</label>
-                <input
-                  type="text"
-                  className={`input ${approveErrors.refund_amount ? 'input-error' : ''}`}
-                  placeholder="0.00"
-                  value={refundAmount}
-                  onChange={(e) => { setRefundAmount(e.target.value); setApproveErrors({}); }}
-                  id="approve-refund-amount"
-                />
-                {approveErrors.refund_amount && <p className="text-xs mt-1" style={{ color: '#ef4444' }}>{approveErrors.refund_amount}</p>}
-              </div>
-            )}
-
-            <div className="flex gap-3 justify-end pt-2">
-              <button type="button" className="btn btn-ghost" onClick={() => { setShowApprove(false); setApproveErrors({}); }}>
-                Cancel
-              </button>
-              <button type="submit" className="btn btn-success" disabled={transitioning !== null}>
-                {transitioning === 'approved' ? 'Approving…' : 'Approve'}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      )}
-
-      {/* Remove Confirmation Modal */}
-      {showRemoveConfirm && (
-        <Modal title="Remove Request" onClose={() => setShowRemoveConfirm(false)}>
-          <p className="text-sm mb-4">
-            Are you sure you want to remove <strong>{r.reference}</strong>? The request will be taken off the desk
-            but the record will be preserved.
-          </p>
-          <div className="flex gap-3 justify-end">
-            <button className="btn btn-ghost" onClick={() => setShowRemoveConfirm(false)} disabled={removing}>
-              Cancel
-            </button>
-            <button className="btn btn-danger" onClick={handleRemove} disabled={removing} id="btn-confirm-remove">
-              {removing ? 'Removing…' : 'Remove'}
-            </button>
-          </div>
-        </Modal>
-      )}
-    </div>
+    <section className="space-y-3">
+      <h2 className="font-semibold">Notes</h2>
+      {notes.length === 0 && <p className="text-sm text-gray-500">No notes yet.</p>}
+      <ol className="space-y-2">
+        {notes.map((n) => (
+          <li key={n.id} className="rounded border bg-white p-3 text-sm">
+            <p className="whitespace-pre-wrap">{n.body}</p>
+            <p className="mt-1 text-xs text-gray-500">{n.author} · {new Date(n.created_at).toLocaleString('en-IN')}</p>
+          </li>
+        ))}
+      </ol>
+      <form onSubmit={add} className="space-y-2">
+        <textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} placeholder="Add a note…"
+          className="w-full rounded border px-3 py-2 text-sm" />
+        {error && <p className="text-sm text-red-700">{error}</p>}
+        <button disabled={saving} className="rounded bg-gray-800 px-3 py-2 text-sm text-white disabled:opacity-50">
+          {saving ? 'Adding…' : 'Add note'}
+        </button>
+      </form>
+    </section>
   );
 }

@@ -1,149 +1,84 @@
 'use client';
 
 import { useState } from 'react';
-
-const REASONS = [
-  { value: 'damaged', label: 'Damaged' },
-  { value: 'wrong_item', label: 'Wrong Item' },
-  { value: 'size_issue', label: 'Size Issue' },
-  { value: 'not_as_described', label: 'Not As Described' },
-  { value: 'changed_mind', label: 'Changed Mind' },
-];
+import { REASONS, REASON_LABELS } from '@/lib/constants';
 
 const EMPTY = {
-  customer_name: '', customer_email: '', customer_phone: '',
-  order_number: '', item_sku: '', item_name: '',
-  quantity: 1, reason: 'damaged', description: '',
+  customer_name: '', customer_email: '', customer_phone: '', order_number: '',
+  item_sku: '', item_name: '', quantity: 1, reason: 'damaged', description: '',
 };
 
-export default function RequestForm({ initial, onSubmit, onCancel, submitting }) {
-  const isEdit = !!initial;
-  const [form, setForm] = useState(() => {
-    if (initial) {
-      return {
-        customer_name: initial.customer_name || '',
-        customer_email: initial.customer_email || '',
-        customer_phone: initial.customer_phone || '',
-        order_number: initial.order_number || '',
-        item_sku: initial.item_sku || '',
-        item_name: initial.item_name || '',
-        quantity: initial.quantity || 1,
-        reason: initial.reason || 'damaged',
-        description: initial.description || '',
-      };
-    }
-    return { ...EMPTY };
+const FIELDS = [
+  ['customer_name', 'Customer name', 'text'],
+  ['customer_email', 'Customer email', 'email'],
+  ['customer_phone', 'Customer phone (optional)', 'tel'],
+  ['order_number', 'Order number', 'text'],
+  ['item_sku', 'Item SKU', 'text'],
+  ['item_name', 'Item name', 'text'],
+  ['quantity', 'Quantity', 'number'],
+];
+
+export default function RequestForm({ initial, submitLabel, onSubmit, onCancel }) {
+  const [values, setValues] = useState(() => {
+    const start = { ...EMPTY };
+    for (const key of Object.keys(EMPTY)) if (initial?.[key] != null) start[key] = initial[key];
+    return start;
   });
-  const [errors, setErrors] = useState({});
+  const [fieldErrors, setFieldErrors] = useState({});
+  const [formError, setFormError] = useState(null);
+  const [saving, setSaving] = useState(false);
 
-  const set = (field, value) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-    setErrors((prev) => { const e = { ...prev }; delete e[field]; return e; });
-  };
+  const set = (key) => (e) => setValues({ ...values, [key]: e.target.value });
 
-  const handleSubmit = async (e) => {
+  async function handleSubmit(e) {
     e.preventDefault();
-    setErrors({});
-
-    // Build payload — for edit, only send changed fields
-    let payload;
-    if (isEdit) {
-      payload = {};
-      for (const key of Object.keys(form)) {
-        const val = key === 'quantity' ? Number(form[key]) : form[key];
-        const orig = initial[key];
-        if (val !== orig && !(val === '' && (orig === null || orig === undefined))) {
-          payload[key] = key === 'quantity' ? Number(form[key]) : form[key] || null;
-        }
-      }
-      if (Object.keys(payload).length === 0) {
-        onCancel();
-        return;
-      }
-    } else {
-      payload = { ...form, quantity: Number(form.quantity) };
-      if (!payload.customer_phone) delete payload.customer_phone;
-      if (!payload.description) delete payload.description;
+    setSaving(true);
+    setFormError(null);
+    setFieldErrors({});
+    try {
+      await onSubmit(values);
+    } catch (err) {
+      setFormError(err.message);
+      setFieldErrors(err.details ?? {});
+    } finally {
+      setSaving(false);
     }
+  }
 
-    const result = await onSubmit(payload);
-    if (result?.errors) {
-      setErrors(result.errors);
-    }
-  };
-
-  const Field = ({ label, field, type = 'text', required = true, ...props }) => (
-    <div>
-      <label className="block text-sm font-medium mb-1" htmlFor={`field-${field}`}>
-        {label} {!required && <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span>}
-      </label>
-      {type === 'textarea' ? (
-        <textarea
-          id={`field-${field}`}
-          className={`input ${errors[field] ? 'input-error' : ''}`}
-          value={form[field]}
-          onChange={(e) => set(field, e.target.value)}
-          rows={3}
-          {...props}
-        />
-      ) : type === 'select' ? (
-        <select
-          id={`field-${field}`}
-          className={`input select ${errors[field] ? 'input-error' : ''}`}
-          value={form[field]}
-          onChange={(e) => set(field, e.target.value)}
-        >
-          {props.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      ) : (
-        <input
-          id={`field-${field}`}
-          type={type}
-          className={`input ${errors[field] ? 'input-error' : ''}`}
-          value={form[field]}
-          onChange={(e) => set(field, e.target.value)}
-          {...props}
-        />
-      )}
-      {errors[field] && <p className="text-xs mt-1" style={{ color: '#ef4444' }}>{errors[field]}</p>}
-    </div>
-  );
+  const inputClass = 'mt-1 w-full rounded border border-gray-300 px-3 py-2';
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-      {errors.body && (
-        <div className="p-3 rounded-lg text-sm" style={{ background: '#fee2e2', color: '#991b1b' }}>
-          {errors.body}
-        </div>
-      )}
+    <form onSubmit={handleSubmit} className="space-y-4 rounded border bg-white p-4">
+      {formError && <div className="rounded bg-red-50 p-3 text-sm text-red-800">{formError}</div>}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Customer Name" field="customer_name" placeholder="John Doe" />
-        <Field label="Email" field="customer_email" type="email" placeholder="john@example.com" />
+      <div className="grid gap-4 sm:grid-cols-2">
+        {FIELDS.map(([key, label, type]) => (
+          <label key={key} className="block text-sm">
+            {label}
+            <input type={type} value={values[key]} onChange={set(key)} className={inputClass}
+              min={type === 'number' ? 1 : undefined} />
+            {fieldErrors[key] && <span className="text-xs text-red-700">{fieldErrors[key]}</span>}
+          </label>
+        ))}
+        <label className="block text-sm">
+          Reason
+          <select value={values.reason} onChange={set('reason')} className={inputClass}>
+            {REASONS.map((r) => <option key={r} value={r}>{REASON_LABELS[r]}</option>)}
+          </select>
+          {fieldErrors.reason && <span className="text-xs text-red-700">{fieldErrors.reason}</span>}
+        </label>
       </div>
 
-      <Field label="Phone" field="customer_phone" required={false} placeholder="+91 9876543210" />
+      <label className="block text-sm">
+        Description (optional)
+        <textarea value={values.description} onChange={set('description')} rows={3} className={inputClass} />
+      </label>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Order Number" field="order_number" placeholder="ORD-10001" />
-        <Field label="Item SKU" field="item_sku" placeholder="SKU-CUSH-01" />
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="Item Name" field="item_name" placeholder="Memory foam seat cushion" />
-        <Field label="Quantity" field="quantity" type="number" min="1" max="1000" />
-      </div>
-
-      <Field label="Reason" field="reason" type="select" options={REASONS} />
-      <Field label="Description" field="description" type="textarea" required={false} placeholder="Describe the issue…" />
-
-      <div className="flex gap-3 justify-end pt-2">
-        <button type="button" className="btn btn-ghost" onClick={onCancel} disabled={submitting}>
-          Cancel
+      <div className="flex gap-2">
+        <button type="submit" disabled={saving} className="rounded bg-blue-600 px-4 py-2 text-white disabled:opacity-50">
+          {saving ? 'Saving…' : submitLabel}
         </button>
-        <button type="submit" className="btn btn-primary" disabled={submitting}>
-          {submitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Request'}
-        </button>
+        {onCancel && <button type="button" onClick={onCancel} className="rounded border px-4 py-2">Cancel</button>}
       </div>
     </form>
   );
