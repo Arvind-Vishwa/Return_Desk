@@ -1,4 +1,7 @@
-require('dotenv').config({ path: '.env.local' });
+try {
+  require('dotenv').config({ path: '.env.local' });
+  require('dotenv').config();
+} catch {}
 const { Client } = require('pg');
 
 const STATUSES = ['open', 'in_review', 'approved', 'rejected', 'completed'];
@@ -38,7 +41,15 @@ const INSERT_REQUEST = `
   RETURNING id`;
 
 async function main() {
-  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error('DATABASE_URL is not set. Please set it in .env or .env.local');
+  }
+  const isCloud = connectionString.includes('sslmode=require') || connectionString.includes('neon.tech') || connectionString.includes('supabase.co') || connectionString.includes('render.com');
+  const client = new Client({
+    connectionString,
+    ssl: isCloud ? { rejectUnauthorized: false } : undefined,
+  });
   await client.connect();
   try {
     await client.query('BEGIN');
