@@ -1,5 +1,5 @@
-import { withErrors, readJson, parseId } from '@/lib/errors';
-import { validateStatusChange } from '@/lib/validation';
+import { withErrors, readJson, parseId } from '@/lib/error';
+import { validateStatusChange } from '@/lib/validations';
 import { changeStatus } from '@/lib/requests';
 
 export const POST = withErrors(async (request, { params }) => {
